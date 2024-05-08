@@ -9,8 +9,10 @@ use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;
 
 use std::net::{Ipv4Addr, SocketAddr};
+use base64::Engine;
 
 use bytes::Bytes;
+use http::header::PROXY_AUTHORIZATION;
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full};
 use hyper::client::conn::http1::Builder;
 use hyper::server::conn::http1;
@@ -99,7 +101,7 @@ async fn main() -> Result<()> {
 async fn proxy(
     req: Request<hyper::body::Incoming>,
     socks_addr: SocketAddr,
-    auth: &'static Option<Auth>,
+    _auth: &'static Option<Auth>,
     allowed_domains: &Option<Vec<String>>,
 ) -> Result<Response<BoxBody<Bytes, hyper::Error>>, hyper::Error> {
     let uri = req.uri();
@@ -119,6 +121,51 @@ async fn proxy(
             return Ok(resp);
         }
     }
+
+    // for i in req.headers().iter() {
+    //     debug!("{:?}", i);
+    // }
+
+    let proxy_authorization = req.headers().get(PROXY_AUTHORIZATION);
+    let result = match proxy_authorization {
+        Some(header_value) => {
+            // if let Ok(auth_str) = header_value.to_str() {
+            //     if auth_str.starts_with("Basic ") {
+            //         let auth_decoded = base64::prelude::BASE64_STANDARD.decode(&auth_str[6..]).unwrap();
+            //         let auth_decoded_str = String::from_utf8(auth_decoded).unwrap();
+            //         let credentials: Vec<&str> = auth_decoded_str.split(':').collect();
+            //         let username = credentials[0];
+            //         let password = credentials[1];
+            //         debug!("Username: {}, Password: {}", username, password);
+            //     }
+            // }
+
+            let auth_str = header_value.to_str().unwrap();
+            if auth_str.starts_with("Basic ") {
+                let auth_decoded = base64::prelude::BASE64_STANDARD.decode(&auth_str[6..]).unwrap();
+                let auth_decoded_str = String::from_utf8(auth_decoded).unwrap();
+                let credentials: Vec<&str> = auth_decoded_str.split(':').collect();
+                let username = credentials[0];
+                let password = credentials[1];
+                debug!("Username: {}, Password: {}", username, password);
+                Some(Some(Auths { username: username.to_string(), password: password.to_string() }))
+            } else {
+                None
+            }
+        }
+        _ => {
+            None
+        }
+    };
+
+    let auth = match result {
+        Some(auth) => auth,
+        None => {
+            let mut resp = Response::new(full("Basic proxy authorization credential must be provided.\n"));
+            *resp.status_mut() = http::StatusCode::FORBIDDEN;
+            return Ok(resp);
+        }
+    };
 
     if Method::CONNECT == req.method() {
         if let Some(addr) = host_addr(req.uri()) {
@@ -195,7 +242,7 @@ async fn tunnel(
     upgraded: Upgraded,
     addr: String,
     socks_addr: SocketAddr,
-    auth: &Option<Auth>,
+    auth: Option<Auths>,
 ) -> Result<()> {
     let mut stream = match auth {
         Some(auth) => {
