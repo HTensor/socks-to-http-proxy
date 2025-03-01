@@ -126,8 +126,7 @@ async fn proxy(
     //     debug!("{:?}", i);
     // }
 
-    let proxy_authorization = req.headers().get(PROXY_AUTHORIZATION);
-    let result = match proxy_authorization {
+    let result = match req.headers().get(PROXY_AUTHORIZATION) {
         Some(header_value) => {
             // if let Ok(auth_str) = header_value.to_str() {
             //     if auth_str.starts_with("Basic ") {
@@ -161,8 +160,12 @@ async fn proxy(
     let auth = match result {
         Some(auth) => auth,
         None => {
-            let mut resp = Response::new(full("Basic proxy authorization credential must be provided.\n"));
-            *resp.status_mut() = http::StatusCode::FORBIDDEN;
+            let mut resp = Response::new(full("Proxy authentication required\n"));
+            *resp.status_mut() = http::StatusCode::PROXY_AUTHENTICATION_REQUIRED;
+            resp.headers_mut().insert(
+                http::header::PROXY_AUTHENTICATE,
+                http::HeaderValue::from_static("Basic realm=\"proxy\""),
+            );
             return Ok(resp);
         }
     };
